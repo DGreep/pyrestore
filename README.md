@@ -1,6 +1,6 @@
 # Pyrestore
 
-A modern, lightweight, and beginner-friendly Python wrapper for **Firebase Auth** and **Google Cloud Firestore**.
+A modern, lightweight, and beginner-friendly Python wrapper for **Firebase Auth** and **Google Cloud Firestore**. 
 
 Powered by `httpx` and `Pyrebase4`, `Pyrestore` provides a familiar Pyrebase-style fluent interface (`.child().child()`) along with high-level manager abstractions to handle authentication, batch operations, retry logic, and complex Firestore queries seamlessly.
 
