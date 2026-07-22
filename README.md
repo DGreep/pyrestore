@@ -1,0 +1,225 @@
+# Pyrestore
+
+A modern, lightweight, and beginner-friendly Python wrapper for **Firebase Auth** and **Google Cloud Firestore**.
+
+Powered by `httpx` and `Pyrebase4`, `Pyrestore` provides a familiar Pyrebase-style fluent interface (`.child().child()`) along with high-level manager abstractions to handle authentication, batch operations, retry logic, and complex Firestore queries seamlessly.
+
+---
+
+## Features
+
+- **High-Level Manager (`FirebaseManager`)**: Single unified client for Auth + Database with simple `True`/`False` return values.
+- **Fluent Path Chaining (`pyrestore`)**: Pyrebase-like syntax for low-level document and collection manipulation.
+- **Automatic Serialization**: Converts standard Python types (`datetime`, `int`, `bool`, `bytes`, lists, maps) to/from Firestore's strict REST format automatically.
+- **Advanced Query Engine**: Full support for `.where()`, `.order_by()`, and `.limit()`.
+- **Resilient Batch Writes**: Multi-collection batch operations with built-in retry logic and exponential backoff.
+- **Field Transforms**: Server-side atomic increments and server timestamps with `FieldValue`.
+
+---
+
+## Installation
+
+```bash
+pip install pyrestore
+```
+
+## Getting Started
+pyrestore was written for Python 3 (>=3.8) and will not work with Python 2.
+
+Add pyrestore to your application
+For use with high-level user-based authentication and database management (FirebaseManager), create the following configuration:
+
+```
+from pyrestore import FirebaseManager
+
+config = {
+    "apiKey": "apiKey",
+    "authDomain": "projectId.firebaseapp.com",
+    "projectId": "projectId",
+    "storageBucket": "projectId.appspot.com"
+}
+
+fb = FirebaseManager(config)
+```
+Alternatively, if you want direct low-level access to Firestore using pyrestore:
+```
+from pyrestore import pyrestore
+
+db = pyrestore("your-project-id")
+```
+
+# Authentication
+Authentication can be handled automatically via FirebaseManager or synchronized manually with low-level pyrestore calls.
+
+## Log the user in
+```
+if fb.login("user@example.com", "Password123!"):
+    print("User ID:", fb.user_id)
+
+# Register a new account
+success = fb.signup(
+    email="user@example.com",
+    password="Password123!",
+    required_fields=["fname", "lname"],
+    fname="Jane",
+    lname="Doe"
+)
+```
+
+## Token expiry & Refreshing
+FirebaseManager handles token refreshing under the hood, but you can also manually refresh sessions:
+```
+fb.refresh_session(refresh_token)
+```
+For low-level calls, update your database client token as needed:
+```
+db.auth(user_id_token)
+```
+
+# Database
+You can build paths to your data by using the child() method.
+```
+db.child("users").child("user_123")
+```
+
+## Save Data
+**`push`**
+To save data with an auto-generated document ID, use the push() method.
+
+**High-level**
+```
+fb.push_document("products", {"name": "Wireless Mouse", "price": 29.99})
+```
+**Low-level**
+```
+data = {"name": "Wireless Mouse", "price": 29.99}
+db.child("products").push(data)
+```
+---
+**`set`**
+To create or overwrite a specific document, use the set() method.
+
+**High-level**
+```
+fb.set_document("users", {"name": "Jane Doe", "role": "admin"})
+```
+**Low-level**
+```
+data = {"name": "Jane Doe", "role": "admin"}
+db.child("users").child("user_123").set(data)
+```
+---
+**`update`**
+To update specific fields for an existing entry, use the update() method.
+
+**High-level**
+```
+fb.update_document("users", {"age": 30})
+```
+**Low-level**
+```
+db.child("users").child("user_123").update({"age": 30})
+```
+---
+**`delete`**
+To delete data for an existing entry, use the delete_document() or delete() methods.
+
+**High-level**
+```
+fb.delete_document("users", "user_123")
+```
+**Low-level**
+```
+db.child("users").child("user_123").delete()
+```
+---
+## Multi-location updates
+You can perform multi-location atomic updates using batch_multi_update() or batch_update():
+
+**Single collection / path batch**
+```
+fb.batch_update("users", role="admin", age=31)
+```
+---
+**Multi-collection uniform batch**
+```
+fb.batch_multi_update(
+    "set",
+    users={"user_123": {"name": "Alex"}},
+    organizations={"org_101": {"name": "Tech Corp"}}
+)
+```
+---
+**Multi-collection mixed-action batch**
+```
+fb.batch_multi_update(
+    users={
+        "user_123": {"_action": "set", "data": {"name": "Sam", "role": "member"}}
+    },
+    orders={
+        "order_456": {"status": "shipped"} # Defaults to "update"
+    },
+    tokens={
+        "token_789": {"_action": "delete"} # Deletes document
+    }
+)
+```
+---
+## Retrieve Data
+**`get`**
+To return data from a path, call the get() method.
+
+**High-level (defaults to logged-in user_id)**
+```
+user_data = fb.get_document("users")
+```
+**Low-level single doc or collection fetch**
+```
+user = db.child("users").child("user_123").get()
+all_users = db.child("users").get()
+```
+---
+## Complex Queries
+**Queries** can be built by chaining multiple query parameters together on pyrestore.
+```
+results = (
+    db.child("products")
+      .where("rating", ">=", 4)
+      .order_by("rating", "DESC")
+      .limit(5)
+      .get()
+)
+```
+---
+**`where`**
+Filter data by specific operators (==, !=, <, <=, >, >=, array-contains, in, array-contains-any).
+```
+products = db.child("products").where("category", "==", "electronics").get()
+```
+---
+**`order_by`**
+Sort documents by field in ascending or descending order.
+```
+products = db.child("products").order_by("price", "ASC").get()
+```
+---
+**`limit`**
+Limits the number of returned documents.
+```
+top_products = db.child("products").order_by("rating", "DESC").limit(10).get()
+```
+---
+# Helper Methods & Transforms
+**`FieldValue`** (Atomic Operations)
+Perform atomic server-side transformations:
+```
+from pyrestore import FieldValue
+
+db.child("products").child("product_123").update({
+    "view_count": FieldValue.increment(1),
+    "updatedAt": FieldValue.server_timestamp()
+})
+```
+---
+**License**
+This project is licensed under the MIT License.
