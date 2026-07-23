@@ -3,42 +3,7 @@ import time
 import requests
 import pyrebase
 from typing import Dict, Any, Optional, List
-from pyrestore.pyrestore import Pyrestore
-
-# ---------------------------------------------------------
-# INTERNAL UTILITIES
-# ---------------------------------------------------------
-
-def _commit_with_retry(batch, max_retries: int = 3) -> bool:
-    """Commits a batch write with exponential backoff retries."""
-    for attempt in range(1, max_retries + 1):
-        if batch.commit():
-            print(f"[Success]: Batch write committed (Attempt {attempt}).")
-            return True
-        if attempt < max_retries:
-            print(
-                f"[Batch Warning]: Commit failed (Attempt {attempt}/{max_retries}). Retrying in {0.5 * attempt}s...")
-            time.sleep(0.5 * attempt)
-
-    print(f"[Batch Error]: All {max_retries} commit attempts failed.")
-    return False
-
-def _parse_auth_error(e: requests.exceptions.HTTPError) -> str:
-    try:
-        err = json.loads(e.args[1])
-        code = err["error"]["message"]
-        error_map = {
-            "INVALID_EMAIL": "Please enter a valid email address.",
-            "INVALID_PASSWORD": "Please enter a valid password.",
-            "EMAIL_NOT_FOUND": "Could not find an account with that email address.",
-            "USER_NOT_FOUND": "Could not find an account with that email address.",
-            "WRONG_PASSWORD": "Incorrect password.",
-            "EMAIL_EXISTS": "An account with this email already exists."
-        }
-        return error_map.get(code, f"Authentication error: {code}")
-    except (json.JSONDecodeError, KeyError, IndexError, TypeError):
-        return "An unknown error occurred during authentication."
-
+from .pyrestore import Pyrestore
 
 class FirebaseManager:
     """A simplified, beginner-friendly Firebase Manager for Authentication and Firestore."""
@@ -62,11 +27,11 @@ class FirebaseManager:
     # AUTHENTICATION METHODS
     # ---------------------------------------------------------
 
-    def login(self, email: str, password: str) -> bool:
+    def login(self, email: str, password: str) -> dict[str, Any]:
         """Logs in a user. Returns True if successful, False otherwise."""
         if not email or not password:
             print("[Auth Error]: Missing email or password.")
-            return False
+            return {"status": "failure", "user_id": self.user_id, "token": self.access_token, "message": "Email and password are required."}
 
         try:
             user = self.auth.sign_in_with_email_and_password(email, password)
@@ -80,14 +45,12 @@ class FirebaseManager:
             self.db.auth(self.access_token)
 
             print(f"[Success]: Logged in user '{self.user_id}'")
-            return True
+            return {"status": "success", "user_id": self.user_id, "token": self.access_token, "message": "Successful login"}
 
         except requests.exceptions.HTTPError as e:
-            print(f"[Auth Failed]: {_parse_auth_error(e)}")
-            return False
-        except Exception as e:
-            print(f"[Auth Error]: {e}")
-            return False
+            error_msg = self._parse_auth_error(e)
+            #raise PermissionError(error_msg)
+            return {"status": "failure","user_id": self.user_id, "token": self.access_token, "message": error_msg}
 
     def signup(
             self,
@@ -96,7 +59,7 @@ class FirebaseManager:
             required_fields: Optional[List[str]] = None,
             max_retries: int = 3,
             **user_data
-    ) -> bool:
+    ) -> dict[str, Any]:
         """
         Creates a user account and writes profile data atomically.
 
@@ -108,14 +71,19 @@ class FirebaseManager:
         """
         if not email or not password:
             print("[Signup Error]: Email and password are required.")
-            return False
+            raise ValueError("Email and password are required.")
 
         # Validate extra required fields before calling auth API
         if required_fields:
             missing = [f for f in required_fields if f not in user_data or user_data[f] is None or user_data[f] == ""]
             if missing:
                 print(f"[Signup Error]: Missing required field(s): {', '.join(missing)}")
-                return False
+                return {
+                "status": "failure",
+                "user_id": self.user_id,
+                "token": self.access_token,
+                "message": f"Missing required field(s): {', '.join(missing)}"
+                }
 
         try:
             # 1. Create auth user
@@ -137,20 +105,28 @@ class FirebaseManager:
                 batch = self.db.batch()
                 batch.set(self.db.child("users").child(self.user_id), profile_payload)
 
-                success = _commit_with_retry(batch, max_retries=max_retries)
+                success = self._commit_with_retry(batch, max_retries=max_retries)
                 if not success:
                     print("[Signup Error]: User created in Auth, but profile write failed after retries.")
-                    return False
+                    return {
+                        "status": "failure",
+                        "user_id": self.user_id,
+                        "token": self.access_token,
+                        "message": "User created in Auth, but profile write failed after retries."
+                        }
 
             print(f"[Success]: User signed up successfully with ID '{self.user_id}'")
-            return True
+            return {
+                "status": "success",
+                "user_id": self.user_id,
+                "token": self.access_token,
+                "message": f"User signed up successfully with ID '{self.user_id}'"
+                }
 
         except requests.exceptions.HTTPError as e:
-            print(f"[Signup Failed]: {_parse_auth_error(e)}")
-            return False
-        except Exception as e:
-            print(f"[Signup Error]: {e}")
-            return False
+            print(f"[Signup Failed]: {self._parse_auth_error(e)}")
+            error_msg = self._parse_auth_error(e)
+            raise PermissionError(error_msg)
 
     def refresh_session(self, refresh_token: str) -> bool:
         """Refreshes expired access tokens. Returns bool."""
@@ -174,47 +150,97 @@ class FirebaseManager:
         target_id = doc_id or self.user_id
         if not target_id:
             print("[Get Error]: No target doc_id provided and user is not logged in.")
-            return None
+            return {
+                "status": "failure",
+                "user_id": self.user_id,
+                "token": self.access_token,
+                "message": "No user_id logged in and no doc_id provided."
+            }
         return self.db.child(collection).child(target_id).get()
 
-    def set_document(self, collection: str, data: Dict[str, Any], doc_id: Optional[str] = None) -> bool:
+    def set_document(self, collection: str, data: Dict[str, Any], doc_id: Optional[str] = None) -> dict[str, Any]:
         """Overwrites or creates a document. Returns bool."""
         target_id = doc_id or self.user_id
         if not target_id:
             print("[Set Error]: No target doc_id provided and user is not logged in.")
-            return False
+            return {
+                "status": "failure",
+                "user_id": self.user_id,
+                "token": self.access_token,
+                "message": "No user_id logged in and no doc_id provided."
+            }
 
         result = self.db.child(collection).child(target_id).set(data)
         if result is not None:
             print(f"[Success]: Document 'set' at {collection}/{target_id}")
-            return True
-        return False
+            return {
+                "status": "success",
+                "user_id": self.user_id,
+                "token": self.access_token,
+                "message": f"Document 'set' at {collection}/{target_id}"
+            }
+        return {
+                "status": "failure",
+                "user_id": self.user_id,
+                "token": self.access_token,
+                "message": "Document could not be created. Try again later."
+            }
 
-    def update_document(self, collection: str, data: Dict[str, Any], doc_id: Optional[str] = None) -> bool:
+    def update_document(self, collection: str, data: Dict[str, Any], doc_id: Optional[str] = None) -> dict[str, Any]:
         """Updates specific fields in a document. Returns bool."""
         target_id = doc_id or self.user_id
         if not target_id:
             print("[Update Error]: No target doc_id provided and user is not logged in.")
-            return False
+            return {
+                "status": "failure",
+                "user_id": self.user_id,
+                "token": self.access_token,
+                "message": "No user_id logged in and no doc_id provided."
+            }
 
         result = self.db.child(collection).child(target_id).update(data)
         if result is not None:
             print(f"[Success]: Document 'updated' at {collection}/{target_id}")
-            return True
-        return False
+            return {
+                "status": "success",
+                "user_id": self.user_id,
+                "token": self.access_token,
+                "message": f"Document 'updated' at {collection}/{target_id}"
+            }
+        return {
+                "status": "failure",
+                "user_id": self.user_id,
+                "token": self.access_token,
+                "message": "Document could not be updated. Try again later."
+            }
 
-    def delete_document(self, collection: str, doc_id: Optional[str] = None) -> bool:
+    def delete_document(self, collection: str, doc_id: Optional[str] = None) -> Dict[str, Any]:
         """Deletes a document. Returns bool."""
         target_id = doc_id or self.user_id
         if not target_id:
             print("[Delete Error]: No target doc_id provided and user is not logged in.")
-            return False
+            return {
+                "status": "failure",
+                "user_id": self.user_id,
+                "token": self.access_token,
+                "message": "No user_id logged in and no doc_id provided."
+            }
 
         success = self.db.child(collection).child(target_id).delete()
         if success:
             print(f"[Success]: Document 'deleted' at {collection}/{target_id}")
-            return True
-        return False
+            return {
+                "status": "success",
+                "user_id": self.user_id,
+                "token": self.access_token,
+                "message": f"Document 'deleted' at {collection}/{target_id}"
+            }
+        return {
+                "status": "failure",
+                "user_id": self.user_id,
+                "token": self.access_token,
+                "message": "Document could not be deleted. Try again later."
+            }
 
     def push_document(self, collection: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Adds a new document with an auto-generated ID to a collection."""
@@ -223,13 +249,18 @@ class FirebaseManager:
             print(f"[Success]: Pushed document to {collection} with generated ID '{result['id']}'")
             return result
         print(f"[Push Error]: Failed to push document to {collection}")
-        return None
+        return {
+                "status": "failure",
+                "user_id": self.user_id,
+                "token": self.access_token,
+                "message": f"Failed to push document to {collection}"
+            }
 
     # ---------------------------------------------------------
     # SMART BATCH HELPERS
     # ---------------------------------------------------------
 
-    def batch_update(self, collection: str, *doc_path_segments: str, max_retries: int = 3, **kwargs) -> bool:
+    def batch_update(self, collection: str, *doc_path_segments: str, max_retries: int = 3, **kwargs) -> Dict[str, Any]:
         """
         Executes an atomic batch update on a single document path.
 
@@ -245,7 +276,7 @@ class FirebaseManager:
             path_segments = [collection, self.user_id]
         else:
             print("[Batch Error]: No document ID specified and no user logged in.")
-            return False
+            raise ValueError("No document ID specified and no user logged in.")
 
         query = self.db.child(path_segments[0])
         for seg in path_segments[1:]:
@@ -254,9 +285,9 @@ class FirebaseManager:
         batch = self.db.batch()
         batch.update(query, kwargs)
 
-        return _commit_with_retry(batch, max_retries=max_retries)
+        return self._commit_with_retry(batch, max_retries=max_retries)
 
-    def batch_multi_update(self, default_action: str = "update", max_retries: int = 3, **collections) -> bool:
+    def batch_multi_update(self, default_action: str = "update", max_retries: int = 3, **collections) -> Dict[str, Any]:
         """
         Executes an atomic batch write across multiple collections.
 
@@ -281,7 +312,7 @@ class FirebaseManager:
         """
         if not collections:
             print("[Batch Error]: No collection updates specified.")
-            return False
+            raise ValueError("No collection updates specified.")
 
         valid_actions = {"update", "set", "delete"}
         batch = self.db.batch()
@@ -289,7 +320,7 @@ class FirebaseManager:
         for collection_name, doc_map in collections.items():
             if not isinstance(doc_map, dict):
                 print(f"[Batch Error]: Value for collection '{collection_name}' must be a dict.")
-                return False
+                raise TypeError(f"Value for collection '{collection_name}' must be a dict.")
 
             for doc_id, item_data in doc_map.items():
                 query = self.db.child(collection_name).child(doc_id)
@@ -304,7 +335,7 @@ class FirebaseManager:
 
                 if doc_action not in valid_actions:
                     print(f"[Batch Error]: Unsupported action '{doc_action}' for {collection_name}/{doc_id}.")
-                    return False
+                    raise KeyError(f"Unsupported action '{doc_action}' for {collection_name}/{doc_id}")
 
                 # Execute action on batch
                 if doc_action == "set":
@@ -314,4 +345,40 @@ class FirebaseManager:
                 elif doc_action == "update":
                     batch.update(query, payload)
 
-        return _commit_with_retry(batch, max_retries=max_retries)
+        return self._commit_with_retry(batch, max_retries=max_retries)
+
+    # ---------------------------------------------------------
+    # INTERNAL UTILITIES
+    # ---------------------------------------------------------
+
+    @staticmethod
+    def _commit_with_retry(batch, max_retries: int = 3) -> Dict[str, Any]:
+        """Commits a batch write with exponential backoff retries."""
+        for attempt in range(1, max_retries + 1):
+            if batch.commit():
+                print(f"[Success]: Batch write committed (Attempt {attempt}).")
+                return {"status": "success", "message": f"Batch write committed in {attempt} attempts.."}
+            if attempt < max_retries:
+                print(
+                    f"[Batch Warning]: Commit failed (Attempt {attempt}/{max_retries}). Retrying in {0.5 * attempt}s...")
+                time.sleep(0.5 * attempt)
+
+        print(f"[Batch Error]: All {max_retries} commit attempts failed.")
+        return {"status": "failure", "message": f"All {max_retries} commit attempts failed."}
+
+    @staticmethod
+    def _parse_auth_error(e: requests.exceptions.HTTPError) -> str:
+        try:
+            err = json.loads(e.args[1])
+            code = err["error"]["message"]
+            error_map = {
+                "INVALID_EMAIL": "Please enter a valid email address.",
+                "INVALID_PASSWORD": "Please enter a valid password.",
+                "EMAIL_NOT_FOUND": "Could not find an account with that email address.",
+                "USER_NOT_FOUND": "Could not find an account with that email address.",
+                "WRONG_PASSWORD": "Incorrect password.",
+                "EMAIL_EXISTS": "An account with this email already exists."
+            }
+            return error_map.get(code, f"Authentication error: {code}")
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+            return "An unknown error occurred during authentication."

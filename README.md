@@ -66,6 +66,30 @@ success = fb.signup(
 )
 ```
 
+## Async Login:
+```
+import asyncio
+
+fb = FirebaseManager(config)
+
+# After setting up and passing in your configuation data
+loop = asyncio.get_running_loop()
+
+success = await loop.run_in_executor(
+    None,
+    fb.login,
+    email,
+    password
+)
+
+if success.get("status") == "success":
+    # Navigate to desired page or execute extra logic
+else:
+    # You can pass in the default message using
+    err_msg = success.get("message")
+    # Or write your own message
+```
+
 ## Token expiry & Refreshing
 FirebaseManager handles token refreshing under the hood, but you can also manually refresh sessions:
 ```
