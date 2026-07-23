@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.0.1] - 2026-07-23
+## [1.0.2] - 2026-07-23
 
 ### Changed
 - **Error Handling Refactor**: Updated `FirebaseManager.login()` , `signup()` , `get_document()` , `set_document()` , `update_document()` , `delete_document()` and `push_document()` to return descriptive dictionaries (e.g., `{"status": "success", "user_id": ...}`) allowing UI frameworks (such as Flet) to display detailed error dialogs without coupling backend logic.
