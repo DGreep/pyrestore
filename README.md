@@ -22,9 +22,9 @@ Powered by httpx and Pyrebase4, pyrestore provides a familiar Pyrebase-style flu
 ---
 
 ## Installation
-
+```
 pip install pyrestore
-
+```
 Note: pyrestore requires Python 3.8+ and will not work with Python 2.
 
 ---
