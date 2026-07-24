@@ -1,9 +1,11 @@
+import os
 import json
 import time
 import requests
 import pyrebase
 from typing import Dict, Any, Optional, List
 from .pyrestore import Pyrestore
+from .storage import Storage
 
 class FirebaseManager:
     """A simplified, beginner-friendly Firebase Manager for Authentication and Firestore."""
@@ -17,6 +19,12 @@ class FirebaseManager:
         self.firebase = pyrebase.initialize_app(self.config)
         self.db = Pyrestore(self.project_id)
         self.auth = self.firebase.auth()
+
+        self.storage_bucket = config.get("storageBucket")
+        self.storage = Storage(
+            project_id=self.project_id,
+            storage_bucket=self.storage_bucket
+        )
 
         # Session state
         self.user_id: Optional[str] = None
@@ -382,3 +390,138 @@ class FirebaseManager:
             return error_map.get(code, f"Authentication error: {code}")
         except (json.JSONDecodeError, KeyError, IndexError, TypeError):
             return "An unknown error occurred during authentication."
+
+    # ---------------------------------------------------------
+    # STORAGE HELPERS (Defaults to current user_id)
+    # ---------------------------------------------------------
+
+    def upload_file(
+            self,
+            folder: str,
+            local_file_path: str,
+            filename: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        [Sync] Uploads a local file to Firebase Storage.
+        If filename is omitted, defaults to current user_id + original extension.
+
+        Example:
+            fb.upload_file("avatars", "path/to/my_photo.png")
+            # Uploads to: avatars/{user_id}.png
+        """
+        target_name = filename or self._get_default_filename(local_file_path)
+        if not target_name:
+            print("[Storage Error]: No filename provided and no user logged in.")
+            raise ValueError("No user_id logged in and no filename provided.")
+
+        result = self.storage.child(folder).child(target_name).put(local_file_path)
+        if result:
+            url = self.storage.child(folder).child(target_name).get_url()
+            print(f"[Success]: File uploaded to {folder}/{target_name}")
+            return {
+                "status": "success",
+                "path": f"{folder}/{target_name}",
+                "url": url,
+                "metadata": result
+            }
+
+        return {"status": "failure", "message": f"Failed to upload file to {folder}/{target_name}"}
+
+    def download_file(
+            self,
+            folder: str,
+            destination_path: str,
+            filename: Optional[str] = None
+    ) -> bool:
+        """
+        [Sync] Downloads a file from Storage to a local path.
+        Defaults to searching for a file named after the logged-in user_id if filename is omitted.
+        """
+        target_name = filename or self.user_id
+        if not target_name:
+            print("[Storage Error]: No filename provided and no user logged in.")
+            raise ValueError("No user_id logged in and no filename provided.")
+
+        success = self.storage.child(folder).child(target_name).download(destination_path)
+        if success:
+            print(f"[Success]: Downloaded {folder}/{target_name} to {destination_path}")
+            return True
+        return False
+
+    def get_file_url(self, folder: str, filename: Optional[str] = None) -> Optional[str]:
+        """
+        [Sync] Fetches the public/authenticated download URL for a file in Storage.
+        Defaults to logged-in user_id if filename is omitted.
+        """
+        target_name = filename or self.user_id
+        if not target_name:
+            print("[Storage Error]: No filename provided and no user logged in.")
+            raise ValueError("No user_id logged in and no filename provided.")
+
+        return self.storage.child(folder).child(target_name).get_url()
+
+    def delete_file(self, folder: str, filename: Optional[str] = None) -> bool:
+        """
+        [Sync] Deletes a file from Storage.
+        Defaults to logged-in user_id if filename is omitted.
+        """
+        target_name = filename or self.user_id
+        if not target_name:
+            print("[Storage Error]: No filename provided and no user logged in.")
+            raise ValueError("No user_id logged in and no filename provided.")
+
+        return self.storage.child(folder).child(target_name).delete()
+
+    # ---------------------------------------------------------
+    # ASYNC STORAGE HELPERS (For Flet or Async code)
+    # ---------------------------------------------------------
+
+    async def upload_file_async(
+            self,
+            folder: str,
+            local_file_path: str,
+            filename: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """[Async] Non-blocking upload helper for Flet and asyncio apps."""
+        target_name = filename or self._get_default_filename(local_file_path)
+        if not target_name:
+            print("[Storage Error]: No filename provided and no user logged in.")
+            raise ValueError("No user_id logged in and no filename provided.")
+
+        result = await self.storage.child(folder).child(target_name).put_async(local_file_path)
+        if result:
+            url = await self.storage.child(folder).child(target_name).get_url_async()
+            print(f"[Success]: Async uploaded file to {folder}/{target_name}")
+            return {
+                "status": "success",
+                "path": f"{folder}/{target_name}",
+                "url": url,
+                "metadata": result
+            }
+
+        return {"status": "failure", "message": f"Failed to async upload file to {folder}/{target_name}"}
+
+    async def download_file_async(
+            self,
+            folder: str,
+            destination_path: str,
+            filename: Optional[str] = None
+    ) -> bool:
+        """[Async] Non-blocking download helper."""
+        target_name = filename or self.user_id
+        if not target_name:
+            print("[Storage Error]: No filename provided and no user logged in.")
+            raise ValueError("No user_id logged in and no filename provided.")
+
+        return await self.storage.child(folder).child(target_name).download_async(destination_path)
+
+    # ---------------------------------------------------------
+    # INTERNAL STORAGE UTILITIES
+    # ---------------------------------------------------------
+
+    def _get_default_filename(self, local_file_path: str) -> Optional[str]:
+        """Generates default filename (user_id + local file extension)."""
+        if not self.user_id:
+            return None
+        _, ext = os.path.splitext(local_file_path)
+        return f"{self.user_id}{ext}"
